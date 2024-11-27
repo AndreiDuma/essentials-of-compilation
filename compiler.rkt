@@ -55,6 +55,17 @@
 ;; HW1 Passes
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
+(define (symbol->unique s)
+  (string->symbol
+   (string-append (symbol->string s)
+                  "."
+                  (symbol->string (gensym)))))
+
+(define (unique-tmp)
+  (string->symbol
+   (string-append "tmp."
+                  (symbol->string (gensym)))))
+
 (define (uniquify-exp env)
   (lambda (e)
     (match e
@@ -63,9 +74,7 @@
          (Var x%))]
       [(Int n) (Int n)]
       [(Let x e body)
-       (let* ((x% (string->symbol (string-append (symbol->string x)
-                                                 "."
-                                                 (symbol->string (gensym)))))
+       (let* ((x% (symbol->unique x))
               (env% (dict-set env x x%)))
          (Let x% ((uniquify-exp env) e) ((uniquify-exp env%) body)))]
       [(Prim op es)
@@ -76,9 +85,46 @@
   (match p
     [(Program info e) (Program info ((uniquify-exp '()) e))]))
 
+(define (rco-atom e)
+  (match e
+    [(Var x) (cons (Var x) '())]
+    [(Int n) (cons (Int n) '())]
+    [(Let x e body)
+     (match (rco-atom body)
+       [(cons body-tmp body-mappings)
+        (cons body-tmp
+              (cons (cons x e) body-mappings))])]
+    [(Prim op es)
+     (let* ([tmp (unique-tmp)]
+            [tmps-mappings (map rco-atom es)]
+            [tmps (map car tmps-mappings)]
+            [mappings (apply append (map cdr tmps-mappings))]
+            [e% (Prim op tmps)])
+       (cons (Var tmp)
+             (cons (cons tmp e%) mappings)))]))
+
+(define (rco-exp e)
+  (match e
+    [(Var x) (Var x)]
+    [(Int n) (Int n)]
+    [(Let x e body)
+     (Let x (rco-exp e) (rco-exp body))]
+    [(Prim op es)
+     (let* ([tmps-mappings (map rco-atom es)]
+            [tmps (map car tmps-mappings)]
+            [mappings (apply append (map cdr tmps-mappings))]
+            [prim (Prim op tmps)])
+       (foldl (lambda (mapping e)
+                (let ([tmp (car mapping)]
+                      [expr (cdr mapping)])
+                  (Let tmp expr e)))
+              prim
+              mappings))]))
+
 ;; remove-complex-opera* : Lvar -> Lvar^mon
 (define (remove-complex-opera* p)
-  (error "TODO: code goes here (remove-complex-opera*)"))
+  (match p
+    [(Program info e) (Program info (rco-exp e))]))
 
 ;; explicate-control : Lvar^mon -> Cvar
 (define (explicate-control p)
@@ -107,7 +153,7 @@
   `(
      ;; Uncomment the following passes as you finish them.
      ("uniquify" ,uniquify ,interp-Lvar ,type-check-Lvar)
-     ;; ("remove complex opera*" ,remove-complex-opera* ,interp-Lvar ,type-check-Lvar)
+     ("remove complex opera*" ,remove-complex-opera* ,interp-Lvar ,type-check-Lvar)
      ;; ("explicate control" ,explicate-control ,interp-Cvar ,type-check-Cvar)
      ;; ("instruction selection" ,select-instructions ,interp-pseudo-x86-0)
      ;; ("assign homes" ,assign-homes ,interp-x86-0)
